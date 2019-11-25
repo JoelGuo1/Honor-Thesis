@@ -1,0 +1,1232 @@
+---
+title: "zhihguo3_21"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(CDM)
+```
+
+```{r}
+data = data.timss11.G4.AUT
+q_1 = data$q.matrix1 
+q_2 = data$q.matrix2
+q_3 = data$q.matrix3
+data = data$data
+tims.score = data[,is.element(colnames(data),q_2$item)] #this is the students' response to the questions
+#total 4668 students answering 174 questions
+```
+
+
+```{R}
+s_answered = apply(tims.score, 2, function(x) which(!is.na(x)))
+#this is for each question , the student that answered it
+```
+
+#get one set of question and try spectral clustering
+```{r}
+s_1 = s_answered[1:9]
+s_2 = s_answered[10:21] #this is the second set of question
+q_11 = s_1[[1]]#the students who answer those questions. 674 students
+q_22 = s_2[[1]]
+p_1 = names(s_answered)[1:9]#the questions they answered. 9 questions
+#find students' answers to the questions
+p_2 = names(s_answered)[10:21]
+q_12 = intersect(q_11,q_22) #the intersection, the students who answered both first set and second set. There are 341 students who answered both, containing 9 + 12 = 21 questions
+sq_12 = tims.score[q_12,c(p_1,p_2)]
+sum(is.na(sq_12)) #check that there is no NA in the dataset. Proved
+```
+
+```{r}
+get_table = function(s1,s2){#s1, s2 are two list of the questions. Take their intersection and do clustering
+  q1 = s1[[1]]
+  q2 = s2[[1]]
+  p1 = names(s1)
+  p2 = names(s2)
+  q_12 = intersect(q1,q2)
+  sq = tims.score[q_12,c(p1,p2)]
+  return(sq)
+}
+s1 = s_answered[1:9]
+s2 = s_answered[10:21]
+a = get_table(s1,s2)
+```
+
+
+```{r}
+#SMC: simple matching coef
+smc = function(x,y){
+  #browser()
+  matched = 0
+  for (i in 1:length(x)) {#assume x and y will always have same length
+    if(x[i] == y[i]){
+      matched = matched +1
+    }
+  }
+  return(matched/length(x))
+}
+a  = c(1 ,0 ,0 ,0 ,0 ,0 ,0 ,0, 0 ,0)
+b = c(0, 0 ,0 ,0, 0, 0, 1 ,0, 0 ,1)
+smc(a,b)
+b = a
+smc(a,b)
+```
+
+```{r}
+make.similarity = function(data) {
+  N <- length(data)
+  S <- matrix(rep(NA,N^2), ncol=N)
+  for(i in 1:N) {
+    for(j in 1:N) {
+      S[i,j] <- smc(data[,i], data[,j])
+    }
+  }
+  return(S)
+}
+S = make.similarity(sq_12)
+S[1:8,1:8]
+```
+#we only have 9 questions for this set. It is insufficient for spectral clustering.
+Possible solutin: 1. simple code >0.5 as same class. 2. Try to see if can cluster the whole questions
+
+```{r}
+make.affinity <- function(S, n.neighboors=2) {
+  N <- length(S[,1])
+
+  if (n.neighboors >= N) {  # fully connected
+    A <- S
+  } else {
+    A <- matrix(rep(0,N^2), ncol=N)
+    for(i in 1:N) { # for each line
+      # only connect to those points with larger similarity 
+      best.similarities <- sort(S[i,], decreasing=TRUE)[1:n.neighboors]
+      for (s in best.similarities) {
+        j <- which(S[i,] == s)
+        A[i,j] <- S[i,j]
+        A[j,i] <- S[i,j] # to make an undirected graph, ie, the matrix becomes symmetric
+      }
+    }
+  }
+  A  
+}
+
+A <- make.affinity(S, 8)  # use 3 neighboors (includes self)
+A[1:8,1:8]
+```
+
+```{r}
+#Use full connected graph
+D <- diag(apply(S, 1, sum)) # sum rows
+# I dont see the reason why we need to use k-nearest neighbour similarity graph
+D[1:8,1:8]
+```
+
+```{r}
+U <- D - S
+round(U[1:21,1:21],1)
+```
+
+```{r}
+k   <- 3
+evL <- eigen(U, symmetric=TRUE)
+Z   <- evL$vectors[,(ncol(evL$vectors)-k+1):ncol(evL$vectors)]
+evL
+#Z   <- evL$vectors
+```
+
+```{r}
+plot(Z, pch=20) # notice that all 50 points, of each cluster, are on top of each other
+```
+
+
+```{r}
+signif(evL$values,2) # eigenvalues are in decreasing order
+
+```
+
+```{r}
+plot(1:10, rev(evL$values)[1:10],log = 'y')
+abline(v=2.25, col="red", lty=2) # there are just 2 clusters as expected
+
+```
+
+
+```{r}
+library(stats)
+km <- kmeans(Z, centers=3, nstart=5)
+km$cluster
+```
+
+```{R}
+#now, compare the matched
+#k_pred = km$cluster
+#compare this with q_0
+#pred_class = list()
+#for(i in 1:7){
+#  pred_class[[i]] = q_0$item[which(k_pred == i)]
+#}
+#q_list = list()
+#for(i in 1:9){
+#  q_list[[i]] = q_0$item[which(q_0[1:21,i+1]!=0)]
+#}
+#pred_class
+#q_list = q_list[-c(1,6)]
+#q_list
+#To compare two clustering method. Not actually comparing their results, but calculated the average difference in similarity in those clusters.
+```
+
+
+```{r}
+spectral_cluster_k = function(data,star,end){ #data is the data set of the selected questions and students reponse
+  #browser()
+  for(i in star:end){
+  n_neightbour = i
+  S = make.similarity(data)
+  A <- make.affinity(S, n_neightbour)  # use 3 neighboors (includes self)
+  D <- diag(apply(A,1, sum)) # sum rows
+  U <- D - A
+  evL <- eigen(U, symmetric=TRUE)
+  if(sum(evL$values<0) == 0 ){#not positive definite
+    plot(1:10, rev(evL$values)[1:10],main = paste("eigen gap with n_neighbor",n_neightbour,sep = "="))
+    abline(v=2.25, col="red", lty=2)
+    return_list = list()
+    return_list[[1]] = evL
+    return_list[[2]] = n_neightbour
+    return (return_list)
+  }
+  }
+  return("no result!")
+}
+#spectral_cluster(a)
+```
+
+```{r}
+spectral_cluster = function(evL,k){
+  Z   <- evL$vectors[,(ncol(evL$vectors)-k+1):ncol(evL$vectors)]
+  km <- kmeans(Z, centers=k, nstart=20)
+  #browser()
+  return(km$cluster)
+  
+}
+```
+
+```{r}
+k = 3
+for(n in 2:21){
+  spectral_cluster(sq_12,n,k)
+}
+#n = 4,5,6,7,8 gives good gap with prefect two groups and maybe three to six.
+#since q_matrix has 3 groups at least, we choose n =4. And you always choose k = 3 for three clusters eventually.
+```
+
+
+
+```{r}
+#library(combinat)
+avg_dis = function(cl,data){
+  #browser()
+  distance = 0;
+  for(i in 1:(length(cl)-1)){
+    for(j in (i+1):length(cl)){
+      a = as.character(cl[i])
+      b = as.character(cl[j])
+      distance = distance + smc(data[[a]],data[[b]]) 
+    }
+  }
+  return(distance/choose(length(cl),2))
+}
+
+```
+
+
+```{r}
+#compare it with q_3,q_02
+#compare the avg distance defined by the similarity for each clusters
+#k_pred = km$cluster
+pred_distance = function(data,k_pred,n){#n is the number of clusters
+  #browser()  
+  pred_class = list()
+  pred_dis = vector()
+  count = 1
+  for(j in 1:n){
+    temp = q_1$item[which(q_1$item %in% colnames(data))][which(k_pred == j)]
+    #temp = q_1$item[which(k_pred == i)+star-1]#otherwise it will always be in the first group/set
+    if(length(temp) > 1){
+      pred_class[[count]] = temp
+      pred_dis = append(pred_dis,avg_dis(pred_class[[count]],data))
+      count = count + 1
+    }
+  }
+  #print(paste("SP",(count - 1),sep = " "))
+  return(mean(pred_dis)) #this is the total average of distance for three clusters from spectral clustering
+}
+```
+
+```{r}
+#for q_3
+q3_distance = function(data){
+  #browser()
+  q3_list = list()
+  q3_dis = vector()
+  count = 1
+  for(j in 1:3){
+    temp = q_3$item[which(q_3$item %in% colnames(data))][which(q_3[q_3$item %in% colnames(data),j+1] != 0)]
+    #temp = q_3$item[which(q_3[star:en,i+1]!=0)+star-1]
+    if(length(temp) > 1){
+      q3_list[[count]] = temp
+      q3_dis = append(q3_dis,avg_dis(q3_list[[count]],data))
+      count = count + 1
+    }
+  }
+  #print(paste("q3",(count-1),sep = " "))
+  return(mean(q3_dis))
+}
+```
+
+```{r}
+#for q_02
+q2_distance = function(data){
+  #browser()
+  q2_list = list()
+  q2_dis = vector()
+  count = 1
+  for(j in 1:3){
+    temp = q_2$item[which(q_2$item %in% colnames(data))][which(q_2[q_2$item %in% colnames(data),j+1] != 0)]
+    #temp = q_2$item[which(q_2[q_2$item %in% colnames(data),j+1] != 0)]
+    if(length(temp) > 1){
+      q2_list[[count]] = temp
+      q2_dis = append(q2_dis,avg_dis(q2_list[[count]],data))
+      count = count+1
+    }
+  }
+  #print(paste("q2",(count-1),sep = " "))
+  return(mean(q2_dis))
+}
+```
+
+```{r}
+q1_distance = function(data){
+  #browser()
+  q1_list = list()
+  q1_dis = vector()
+  count = 1
+  for(j in 1:9){
+    temp = q_1$item[which(q_1$item %in% colnames(data))][which(q_1[q_1$item %in% colnames(data),j+1] != 0)]
+    #temp =  q_1$item[which(q_1[star:en,i+1]!=0)+star-1]
+    if(length(temp) > 1){
+    q1_list[[count]] = temp
+    q1_dis = append(q1_dis,avg_dis(q1_list[[count]],data))
+    count = count + 1
+    }
+  }
+  #print(paste("q1",(count-1),sep = " "))
+  return(mean(q1_dis))
+}
+```
+
+
+6/23
+#Two things:
+1). For each student group, get the similarity measure for the questions. And take average across all the groups. This will be the "avg group similarity" when cluster by questions.
+```{r}
+#need to transfrom the list into data frame in order to group
+func = function(x,y){
+  if((length(x) == length(y)) && (sum(x != y) == 0)){
+    return(TRUE)
+  }else{
+    return(FALSE)
+  }
+}
+s_list = list()
+q_list = list()
+i = 1
+count = 1
+s_list[[count]] = s_answered[[1]]
+count = count + 1
+while(i < length(s_answered)){
+  #browser()
+  for(j in (i+1):length(s_answered)){
+    if(!func(s_answered[[i]],s_answered[[j]])){
+      s_list[[count]] = s_answered[[j]]
+      q_list[[count-1]] = names(s_answered)[i:(j-1)]
+      count = count + 1
+      i = j-1
+      break
+    }
+  }
+  if(j == length(s_answered)) break
+  i = i +1
+}
+q_list[[count-1]] = names(s_answered)[i:length(s_answered)]
+#Now, s_list is the students id and q_list is their questions set. There are 14 question sets and each set was answered by roughly 650 students.
+```
+
+```{r}
+sim_q2 = vector()
+sim_q3 = vector()
+sim_q1 = vector()
+for (i in 1:length(q_list)) {
+  sq = tims.score[s_list[[i]],q_list[[i]]]
+  #q3_distance(star,end,sq) #0.58 3 groups
+  sim_q2 = append(sim_q2,q2_distance(sq)) #0.56 3 groups
+  sim_q3 = append(sim_q3,q3_distance(sq)) #0.55 3 groups
+  sim_q1 = append(sim_q1,q1_distance(sq)) #0.56
+  #q1_distance(star,end,sq) #0.58 7 groups
+}
+avg_sim_q2 = mean(sim_q2)
+avg_sim_q2
+avg_sim_q3 = mean(sim_q3)
+avg_sim_q3
+avg_sim_q1 = mean(sim_q1)
+avg_sim_q1
+```
+The average group similarity is 0.5641019, use Q2 on real data.Use Q3, is 0.5498022. Use Q1, is 0.5641085.
+
+#We also need spectral clustering on the whole data
+```{r}
+#the procedure is that: we do SP on the 14 clusters and take the average.
+#We have to mannual do this since we need to pick the number by hand.
+#Also note that we need to cluster each set into two groups: 1). 3 groups. 2). 5 groups or more
+sp_3 = vector()
+sp_8 = vector()
+for(i in 1:10){
+sq = tims.score[s_list[[i]],q_list[[i]]]
+sp_result = spectral_cluster_k(sq,2,50)
+n = sp_result[[2]]
+evl = sp_result[[1]]
+k = 3
+k_pred = spectral_cluster(evL = evl,k = k)
+sp_3 = append(sp_3,pred_distance(sq,k_pred,k)) #0.66 3 groups
+k = 8
+k_pred = spectral_cluster(evL = evl,k = k)
+sp_8 = append(sp_8,pred_distance(sq,k_pred,k))#0.66 3 groups
+}
+avg_sp_3 = mean(sp_3)
+avg_sp_8=mean(sp_8)
+avg_sp_3
+avg_sp_8
+```
+The avg group similarity of SP is 0.6350864 for three skills (Q1/Q2) and 0.6727725 for 4 skills (Q1).
+
+
+2). For each question groups, get the sim for the students, take avg. Ths is the "avg group similarity" when cluster by students.
+```{r}
+s_answered2 = apply(tims.score, 1, function(x) colnames(tims.score)[which(!is.na(x))])
+#s_answered2 is cluster by students. List of length 4668, each student answered roughly 25 questions.
+#need to transfrom the list into data frame in order to group
+func = function(x,y){
+  if((length(x) == length(y)) && (sum(x != y) == 0)){
+    return(TRUE)
+  }else{
+    return(FALSE)
+  }
+}
+
+s_list2 = list()
+q_list2 = list()
+for(i in 1:12){
+  #add the students' id with the questions they answered.
+  s_list2[[i]] = i
+  q_list2[[i]] = s_answered2[[i]]
+  for (j in 13:length(s_answered2)) {
+    if(func(s_answered2[[j]],s_answered2[[i]])){
+      s_list2[[i]] = append(s_list2[[i]],j)
+    }
+  }
+}
+#s_list2 is the set of students. There are 12 sets in total, each set of students answered same questions, roughly 330 questions. q_list2 is the questions ID they answered, 12 sets of students answered 12 different sets of questions.
+```
+
+```{r}
+#run DINA model,then for each student group in s_list2, cluster them by skill profile, then study the similarity in the responses to questions.
+
+q_matrix = list()
+q_matrix[[1]] = q_2
+q_matrix[[2]] = q_3
+for (i in 1:length(q_matrix)){
+avg_s = vector()
+q_2.dina = q_matrix[[i]][,-1]
+timss.dina = din(data = tims.score,q.matrix = q_2.dina,rule = "DINA",progress = TRUE)
+ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+ind.stu = data.frame(ind.stu)
+colnames(ind.stu) = colnames(q_matrix)[2:4]
+for(j in 1:length(s_list2)){#12 students groups, each group answered same questions.
+  avg_s_skills = vector()
+  student = s_list2[[j]]
+  stud.skill = ind.stu[student,]
+  stud.skill$stud_id = row.names(stud.skill)
+  stud.skill_agg = aggregate(stud.skill,list(stud.skill[,1],stud.skill[,2],stud.skill[,3]),FUN = list)
+  stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+  for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+    stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+    sq = tims.score[stud_group,q_list2[[j]]]
+    sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+    sq = as.data.frame(sq)
+    #colnames(sq) = as.numeric(colnames(sq))
+    avg_s_skills = append(avg_s_skills,avg_dis(colnames(sq),sq))
+  }
+  avg_s = mean(avg_s_skills)
+}
+print(mean(avg_s))
+}
+```
+Cluster by students: when use Q2, 0.6738647. When use Q3, 0.6714843
+
+```{r}
+
+avg_s = vector()
+for(j in 1:length(s_list2)){#12 students groups, each group answered same questions.
+  avg_s_skills = vector()
+  student = s_list2[[j]]
+  s_data = tims.score[s_list2[[j]],q_list2[[j]]]
+  q_2.dina = q_3[q_2$item %in% q_list2[[j]],]
+  timss.dina = din(data = s_data,q.matrix = q_2.dina[2:4],rule = "DINA",progress = TRUE)
+  ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+  ind.stu = data.frame(ind.stu)
+  stud.skill = ind.stu
+  stud.skill$stud_id = row.names(stud.skill)
+  stud.skill_agg = aggregate(stud.skill,list(stud.skill[,1],stud.skill[,2],stud.skill[,3]),FUN = list)
+  stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+  for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+    stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+    if(length(stud_group) > 1){
+    sq = s_data[stud_group,]
+    sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+    sq = as.data.frame(sq)
+    #colnames(sq) = as.numeric(colnames(sq))
+    avg_s_skills = append(avg_s_skills,avg_dis(colnames(sq),sq))
+    }
+  }
+  avg_s = mean(avg_s_skills)
+}
+mean(avg_s)
+```
+
+Q2: 0.672299
+Q3: 0.6697952
+
+
+#Now, SP. Similar to the part above!
+```{r}
+#the procedure is that: we do SP on the 12 clusters and take the average.For each student set, we use SP to cluster the students into 8 groups, and the similarity of the questions each sub-group answered, after taking average, will the the avg similarity measure for this student set. Note that we have 12 such sets, so do the same stuff 12 times and simly take average!
+sp_stud = vector()
+for(i in 1:length(s_list2)){
+  sq = tims.score[s_list2[[i]],q_list2[[i]]]
+  sq = t(sq)
+  sq = as.data.frame(sq)
+  sp_result = spectral_cluster_k(sq,2,50)
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 8
+  k_pred = spectral_cluster(evL = evl,k = k)
+  #below is copied from pred_distance(), but we cant directly that function since the matrix is different.
+  pred_dis = vector()
+  for(j in 1:k){
+    temp = colnames(sq)[k_pred == j]
+    if(length(temp) > 1){
+      pred_dis = append(pred_dis,avg_dis(temp,sq))
+    }
+  }
+  #print(paste("SP",length(pred_dis),sep = " "))
+  sp_stud = append(sp_stud,mean(pred_dis))
+}
+mean(sp_stud)
+
+```
+
+The SP on cluster by students is 0.7222792
+
+
+##Simulated data with correct Q-matrix
+1).Clustering on questions (done in other Rfiles)
+2).Clustering on students
+
+1). Cluster by questions
+```{r}
+set.seed(1)
+sim_q2_dina = sim.din(N = 1200,q.matrix = q_2[2:4],guess=rep(0.3686207,nrow(q_2)),slip = rep(0.3237241, nrow(q_2)))$dat
+sim_q2_dina = as.data.frame(sim_q2_dina)
+colnames(sim_q2_dina) = q_2$item
+```
+
+```{r}
+q2_distance(sim_q2_dina)
+```
+clustering by questions, Q2 matrix, true Qmatrix. 0.5467995
+
+```{r}
+sim_q3_dina = sim.din(N = 300,q.matrix = q_3[2:4],guess=rep(0,nrow(q_3)),slip = rep(0, nrow(q_3)))$dat
+sim_q3_dina = as.data.frame(sim_q3_dina)
+colnames(sim_q3_dina) = q_3$item
+```
+
+```{r}
+q3_distance(sim_q3_dina)
+```
+clustering by questions, Q3 matrix, true Qmatrix. 0.550093
+
+```{r}
+sim_q1_dina = sim.din(N = 300,q.matrix = q_1[2:10],guess=rep(0.3686207,nrow(q_1)),slip = rep(0.3237241, nrow(q_1)))$dat
+sim_q1_dina = as.data.frame(sim_q1_dina)
+colnames(sim_q1_dina) = q_1$item
+```
+
+```{r}
+q1_distance(sim_q1_dina)
+```
+clustering by questions, Q3 matrix, true Qmatrix. 0.5489837
+
+spectral clustering
+```{r}
+sp_result = spectral_cluster_k(sim_q1_dina,2,50)
+n = sp_result[[2]]
+evl = sp_result[[1]]
+k = 9
+k_pred = spectral_cluster(evL = evl,k = k)
+pred_distance(sim_q1_dina,k_pred,k)
+```
+#change the sim_q2_dina to the other two matrix will get the rest of the results.
+cluster by question, Q2 matrix to simulate data. True Qmatirx, 0.5467995
+cluster by question, Q3 matrix to simulate data. True Qmatirx, 0.5493456
+cluster by question, Q1 matrix to simulate data. True Qmatirx, 0.5489278
+
+2). cluster on student
+```{r}
+q_2.dina = q_3[,-1]
+timss.dina = din(data = sim_q3_dina,q.matrix = q_2.dina,rule = "DINA",progress = TRUE)
+ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+ind.stu = data.frame(ind.stu)
+colnames(ind.stu) = colnames(q_3)[2:4]
+ind.stu$stud_id = row.names(ind.stu)
+stud.skill_agg = aggregate(ind.stu,list(ind.stu[,1],ind.stu[,2],ind.stu[,3]),FUN = function(x) rbind(as.numeric(x)))
+stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+avg_s_skills = vector()
+for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+  stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+  sq = sim_q3_dina[stud_group,]
+  sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+  sq = as.data.frame(sq)
+  #colnames(sq) = as.numeric(colnames(sq))
+  avg_s_skills = append(avg_s_skills,avg_dis(colnames(sq),sq))
+}
+mean(avg_s_skills)
+```
+cluster by question, Q2 matrix to simulate data. True Qmatirx, 0.5472818
+cluster by question, Q3 matrix to simulate data. True Qmatirx, 0.5502268
+
+Spectral Clustering
+```{r}
+  sq = sim_q3_dina
+  sq = t(sq)
+  sq = as.data.frame(sq)
+  sp_result = spectral_cluster_k(sq,2,50)
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 8
+  k_pred = spectral_cluster(evL = evl,k = k)
+  #below is copied from pred_distance(), but we cant directly that function since the matrix is different.
+  pred_dis = vector()
+  for(j in 1:k){
+    temp = colnames(sq)[k_pred == j]
+    if(length(temp) > 1){
+      pred_dis = append(pred_dis,avg_dis(temp,sq))
+    }
+  }
+  #print(paste("SP",length(pred_dis),sep = " "))
+  mean(pred_dis)
+
+```
+cluster by question, Q2 matrix to simulate data. True Qmatirx, 0.54127
+cluster by question, Q3 matrix to simulate data. True Qmatirx, 0.5453155
+
+#####Simluated data with incorrect Qmatrix
+#we change the portion of misspecification from 10% to 90%. And both cluster by questions and students.
+
+#Spectral Clustering
+
+```{r}
+pred_newdistance = function(data,k_pred,n,qmatrix){
+  pred_class = list()
+  pred_dis = vector()
+  count = 1
+  for(j in 1:n){
+    temp = qmatrix$item[which(qmatrix$item %in% colnames(data))][which(k_pred == j)]
+    #temp = q_1$item[which(k_pred == i)+star-1]#otherwise it will always be in the first group/set
+    if(length(temp) > 1){
+      pred_class[[count]] = temp
+      pred_dis = append(pred_dis,avg_dis(pred_class[[count]],data))
+      count = count + 1
+    }
+  }
+  #print(paste("SP",(count - 1),sep = " "))
+  return(mean(pred_dis))
+}
+```
+
+```{r}
+result = vector()
+for(i in 1:15){
+  #sim_q2_dina_mis = sim.din(N = 300,q.matrix = q_2new,guess=rep(0.3686207,nrow(q_2)),slip = rep(0.3237241, nrow(q_2)))$dat
+  q_id = sample(1:nrow(q_2),size = 20)
+  q_name = q_3$item[q_id]
+  q_id = q_2[q_id,]
+  q_id$item = q_name
+  sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(0.3686207,nrow(q_id)),slip = rep(0.3237241, nrow(q_id)))$dat
+  sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+  colnames(sim_q2_dina_mis) = q_name
+  sp_result = spectral_cluster_k(sim_q2_dina_mis,2,15)
+  if(length(sp_result) == 2){
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 3
+  k_pred = spectral_cluster(evL = evl,k = k)
+  result = append(result,pred_newdistance(sim_q2_dina_mis,k_pred,k,q_id))
+  }
+}
+#q3_sp = mean(result)
+#q3_sp
+#q3_sp=mean(result)
+#q3_sp
+mean(result)
+```
+0.5489681
+Q2 matrix: 0.9779184
+Q3 matrix: 0.981534
+Q1 matrix: 0.918014
+
+```{r}
+#for q_02
+q_newdistance = function(qmatrix,data,n){
+  #browser()
+  q2_list = list()
+  q2_dis = vector()
+  count = 1
+  for(j in 1:n){
+    temp = qmatrix$item[which(qmatrix$item %in% colnames(data))][which(qmatrix[qmatrix$item %in% colnames(data),j+1] != 0)]
+    #temp = q_2$item[which(q_2[q_2$item %in% colnames(data),j+1] != 0)]
+    if(length(temp) > 1){
+      q2_list[[count]] = temp
+      q2_dis = append(q2_dis,avg_dis(q2_list[[count]],data))
+      count = count+1
+    }
+  }
+  #print(paste("q2",(count-1),sep = " "))
+  return(mean(q2_dis))
+}
+```
+
+1). cluster by questions
+(Qmatrix change method 1)
+```{r}
+#only need to: generate data use wrong Qmatrix, cluster questions, and study the similarity of the data!
+set.seed(1)
+  #random pick 10 questions from the Q matrix
+for(i in 1:15){
+  acc_sub = vector()
+  q_id = sample(1:nrow(q_2),size = 20)
+  q_name = q_2$item[q_id]
+  q_id = q_1[q_id,]
+  q_id$item = q_name
+  #q_id = q_id[,c(4,1,2,3)]
+  for(j in seq(0.1,0.9,by = 0.1)){
+  id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+  q_2new = q_id[,-1]
+  for(k in 1:length(id)){
+    index = sample(c(1:9)[-which(q_2new[id[k],] == 1)],1)
+    q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+    q_2new[id[k],index] = 1
+  }
+    sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:10],guess=rep(0,nrow(q_id)),slip = rep(0, nrow(q_id)))$dat
+    #sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(0.3686207,nrow(q_id)),slip = rep(0.3237241, nrow(q_id)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    q_2new$item = q_name
+    q_2new = q_2new[,c(10,1:9)]
+    acc_sub = append(acc_sub,q_newdistance(q_2new,sim_q2_dina_mis,9))#should not use Q2! Use the new Q matrix.
+  }
+  q2m1_acc[i,] = acc_sub
+}
+#q2m1_result = apply(q2m1_acc,2,mean)
+#q1m2_result = apply(q2m1_acc,2,mean)
+#q1m2_result
+q1m3_result = apply(q2m1_acc,2,mean)
+q1m3_result
+```
+0.5375485 0.5327395 0.5245647 0.5225140 0.5197915 0.5196123 0.5183602 0.5200058 0.5224814
+Clustering questions, Q2, method 1, 
+DINA:0.9080153 0.8730225 0.8197192 0.7745143 0.7553810 0.7131643 0.7068420 0.7051071 0.6778004
+Clustering questions, Q3, method 1, 
+DINA:0.9312399 0.8528765 0.8316278 0.7757702 0.7607310 0.7309843 0.7113552 0.6870616 0.6865738 
+Clustering questions, Q1, method 1, 
+DINA: 0.9175129 0.8235674 0.7587453 0.7198802 0.6741112 0.6379470 0.5938215 0.5825479 0.5775070
+Clustering questions, Q2, method 2, 
+DINA:0.8785292 0.8082159 0.7381381 0.7314106 0.6975184 0.6660882 0.6779748 0.6979711 0.7443053
+Clustering questions, Q3, method 2, 
+DINA: 0.8920105 0.8203323 0.7476721 0.7266137 0.6945859 0.6842732 0.7019440 0.6979255 0.7131168
+Clustering questions, Q1, method 2, 
+DINA: 0.9071428 0.8191246 0.7171076 0.6964884 0.6467722 0.6200678 0.5681764 0.5784009 0.5605903
+Clustering questions, Q2, method 3, 
+DINA:0.8849761 0.8269896 0.7770967 0.7739074 0.7569964 0.7260409 0.7209658 0.7153230 0.7164376
+Clustering questions, Q3, method 3, 
+DINA: 0.9088003 0.8468727 0.7914685 0.7774544 0.7433082 0.7416273 0.7204069 0.7115845 0.7071398
+Clustering questions, Q1, method 3, 
+DINA: 0.9093178 0.8418232 0.7685503 0.7530418 0.7112366 0.7168972 0.6558137 0.6810758 0.6642283
+#plot on the gap
+```{r}
+plot(x = seq(0,0.9,by=0.1),c(1,q3m3_result),col = "blue",xlab = "percentage misspecified of Q-matrix",ylab = "average group similarity",main = "Similarity Gap using Q3 martrix Method 3",ylim = c(0.7,1),type = 'b')
+abline(a = q3_sp,b = 0,col = "red")
+abline(a = q3_sp*0.8657,b=0,col = "black",lty = 2,lwd = 2)
+legend(x = 0.6,y = 0.95,legend = c("spectral clustering","DINA","Simulate Gap"),lty=c(1,1,2),pch=c(NA,1,NA),col = c("red","blue","black"),lwd = c(1,1,2))
+```
+
+#Zoom in the gap
+```{r}
+set.seed(1)
+q2m1_acc = matrix(data = NA,nrow = 20,ncol = 41)
+  #random pick 10 questions from the Q matrix
+for(i in 1:20){
+  acc_sub = vector()
+  q_id = sample(1:nrow(q_2),size = 20)
+  q_name = q_2$item[q_id]
+  q_id = q_1[q_id,]
+  q_id$item = q_name
+  #q_id = q_id[,c(4,1,2,3)]
+  for(j in seq(0,0.2,by = 0.005)){
+  if(j == 0){
+    q_2new = q_id[,-1]
+  }else{
+  id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+  q_2new = q_id[,-1]
+  for(k in 1:length(id)){
+    index = sample(1:9,1)
+    q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+    q_2new[id[k],index] = 1
+  }
+  }
+    sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:10],guess=rep(0,nrow(q_id)),slip = rep(0, nrow(q_id)))$dat
+    #sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(0.3686207,nrow(q_id)),slip = rep(0.3237241, nrow(q_id)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    q_2new$item = q_name
+    q_2new = q_2new[,c(10,1:9)]
+    acc_sub = append(acc_sub,q_newdistance(q_2new,sim_q2_dina_mis,9))#should not use Q2! Use the new Q matrix.
+  }
+  q2m1_acc[i,] = acc_sub
+}
+#q2m1_result_zoom = apply(q2m1_acc,2,mean)
+#q2m1_result_zoom
+q1m1_result_zoom = apply(q2m1_acc,2,mean)
+q1m1_result_zoom
+```
+
+#Zoom in gap plot
+```{r}
+plot(x = seq(0,0.2,by=0.005),q1m1_result_zoom,col = "blue",xlab = "percentage misspecified of Q-matrix",ylab = "average group similarity",main = "Similarity Gap using Q1 martrix Method 1 Zoom in",ylim = c(0.8,1),type = 'b')
+abline(a = q1_sp,b = 0,col = "red")
+legend(x = 0,y = 0.85,legend = c("spectral clustering","DINA"),lty=c(1,1),pch=c(NA,1),col = c("red","blue"))
+```
+
+(Qmatrix change method 2)
+```{r}
+set.seed(1)
+acc_sub = vector()
+#q2_miss_dis = vector()
+for(j in seq(0.1,0.9,by = 0.1)){
+  id = sample(1:nrow(q_3),size = ceiling(nrow(q_3)*j),replace = FALSE)
+  q_2new = q_3[,-1]
+for(k in 1:length(id)){
+  index = which(q_2new[id[k],] == 1)#index could be 1 to 3
+  #q_2new[id[i],index] = 0
+  index = (index+1) %% 3
+  if(index == 0){
+    index = 3
+  }
+  q_2new[id[k],index] = 1
+}
+  sim_q2_dina_mis = sim.din(N = 300,q.matrix = q_2new,guess=rep(0.3686207,nrow(q_3)),slip = rep(0.3237241, nrow(q_3)))$dat
+  sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+  colnames(sim_q2_dina_mis) = q_3$item
+  acc_sub = q3_distance(sim_q2_dina_mis)
+  #q2_miss_dis = append(q2_miss_dis,q2_distance(sim_q2_dina_mis))
+}
+q3m2_acc = apply(acc_sub, 2,mean)
+q3m2_acc
+```
+Clustering questions, Q2, method 2, 
+DINA: 0.5431569 0.5393179 0.5361290 0.5345888 0.5332062 0.5324086 0.5335677 0.5355652 0.5382202 
+Clustering questions, Q3, method 2, 
+DINA: 0.5432209 0.5390914 0.5360980 0.5343416 0.5329654 0.5325831 0.5336148 0.5356068 0.5380826 
+
+
+
+2). Cluster by students
+
+#spectral clustering
+```{r}
+result = vector()
+for(i in 1:5){
+  pred_dis = vector()
+  #sim_q2_dina_mis = sim.din(N = 300,q.matrix = q_2new,guess=rep(0.3686207,nrow(q_2)),slip = rep(0.3237241, nrow(q_2)))$dat
+  q_id = sample(1:nrow(q_2),size = 25)
+  q_name = q_2$item[q_id]
+  q_id = q_3[q_id,]
+  q_id$item = q_name
+  sim_q2_dina_mis = sim.din(N = 400,q.matrix = q_id[,-1],guess=rep(0,nrow(q_id)),slip = rep(0, nrow(q_id)))$dat
+  sq = t(sim_q2_dina_mis)
+  sq = as.data.frame(sq)
+  row.names(sq) = q_name
+  #colnames(sq) = c(1:length(sq))
+  sp_result = spectral_cluster_k(sq,2,200)
+  if(length(sp_result) == 2){
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 8
+  k_pred = spectral_cluster(evL = evl,k = k)
+  for(j in 1:k){
+    temp = colnames(sq)[k_pred == j]
+    if(length(temp) > 1){
+      pred_dis = append(pred_dis,avg_dis(temp,sq))
+    }
+  }
+  result = append(result,mean(pred_dis))
+  }
+}
+#q3_sp = mean(result)
+#q3_sp
+#q2_sp_s=mean(result)
+#q2_sp_s
+mean(result)
+#q2_sp_s = 0.9607886
+#q3_sp_s = 0.9688493
+```
+0.5745642
+
+
+```{r}
+set.seed(1)
+q2m1_acc_s=matrix(data = NA,nrow = 10,ncol = 9)
+for(i in 1:10){
+  result = vector()
+  q_id = sample(1:nrow(q_2),size = 25)
+    q_name = q_2$item[q_id]
+    q_id = q_2[q_id,]
+    q_id$item = q_name
+    for(j in seq(0.1,0.9,by = 0.1)){
+      acc_sub = vector()
+      id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+      q_2new = q_id[,-1]
+      for(k in 1:length(id)){
+        index = sample(c(1:3)[-which(q_2new[id[k],] == 1)],1)
+        #q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+        q_2new[id[k],index] = 1
+      }
+    sim_q2_dina_mis = sim.din(N = 400,q.matrix = q_id[,-1],guess=rep(0,nrow(q_id)),slip = rep(0, nrow(q_id)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    timss.dina = din(data = sim_q2_dina_mis,q.matrix = q_2new,rule = "DINA",progress = TRUE)
+    ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+    ind.stu = data.frame(ind.stu)
+    #colnames(ind.stu) = colnames(q_2new)
+    ind.stu$stud_id = row.names(ind.stu)
+    stud.skill_agg = aggregate(ind.stu,list(ind.stu[,1],ind.stu[,2],ind.stu[,3]),FUN = list)
+    stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+    for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+    stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+    if(length(stud_group) > 1){
+    sq = sim_q2_dina_mis[stud_group,]
+    sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+    sq = as.data.frame(sq)
+    #colnames(sq) = as.numeric(colnames(sq))
+    acc_sub = append(acc_sub,avg_dis(colnames(sq),sq))
+    }
+    }
+    result = append(result,mean(acc_sub))
+    }
+  q2m1_acc_s[i,] = result
+}
+#apply(q2m1_acc_s,2,mean)
+q2m3_result_s = apply(q2m1_acc_s,2,mean)
+#q3m1_result_s = apply(q2m1_acc_s,2,mean)
+#q3m1_result_s
+```
+0.5745304 0.5753073 0.5687676 0.5681256 0.5680137 0.5629221 0.5604705 0.5586114 0.5571617
+
+#plot the gap
+```{r}
+plot(x = seq(0,0.9,by=0.1),c(1,q2m3_result_s),col = "blue",xlab = "percentage misspecified of Q-matrix",ylab = "average group similarity",main = "DINA and Spectral Clusteing Similarity Q2 Method 3",ylim = c(0.9,1),type = 'b')
+abline(a = q2_sp_s,b = 0,col = "red")
+abline(v = 0.13,col = 'black',lty = 2)
+#abline(a = q2_sp_s*0.933,b=0,col = "black",lty = 2,lwd = 2)
+legend(x = 0,y = 0.94,legend = c("spectral clustering","DINA"),lty=c(1,1),pch=c(NA,1),col = c("red","blue"),lwd = c(1,1))
+```
+
+
+#Zoom in
+```{r}
+set.seed(1)
+q2m1_acc_s=matrix(data = NA,nrow = 20,ncol = 9)
+for(i in 1:20){
+  result = vector()
+  q_id = sample(1:nrow(q_2),size = 25)
+    q_name = q_2$item[q_id]
+    q_id = q_2[q_id,]
+    q_id$item = q_name
+    for(j in seq(0.1,0.9,by = 0.1)){
+      acc_sub = vector()
+      id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+      q_2new = q_id[,-1]
+      for(k in 1:length(id)){
+        index = sample(1:3,1)
+        q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+        q_2new[id[k],index] = 1
+      }
+    sim_q2_dina_mis = sim.din(N = 400,q.matrix = q_id[,-1],guess=rep(0,nrow(q_2)),slip = rep(0, nrow(q_2)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    timss.dina = din(data = sim_q2_dina_mis,q.matrix = q_2new,rule = "DINA",progress = TRUE)
+    ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+    ind.stu = data.frame(ind.stu)
+    colnames(ind.stu) = colnames(q_2new)
+    ind.stu$stud_id = row.names(ind.stu)
+    stud.skill_agg = aggregate(ind.stu,list(ind.stu[,1],ind.stu[,2],ind.stu[,3]),FUN = list)
+    stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+    for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+    stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+    sq = sim_q2_dina_mis[stud_group,]
+    sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+    sq = as.data.frame(sq)
+    #colnames(sq) = as.numeric(colnames(sq))
+    acc_sub = append(acc_sub,avg_dis(colnames(sq),sq))
+    }
+    result = append(result,mean(acc_sub))
+    }
+  q2m1_acc_s[i,] = result
+}
+q2m1_result_s_zoom = apply(q2m1_acc_s,2,mean)
+q2m1_result_s_zoom
+```
+
+#Slip guess rate
+
+$first, cluster by question/ only work on Q-matrix. Q2, method1
+```{r}
+set.seed(1)
+sg_result = matrix(data = NA,nrow = 9,ncol = 9)
+row_id = 1
+for(rate in seq(0.05,0.45,by = 0.05)){
+q2m1_acc = matrix(data = NA,nrow = 15,ncol = 9)
+  #random pick 10 questions from the Q matrix
+for(i in 1:15){
+  acc_sub = vector()
+  q_id = sample(1:nrow(q_2),size = 20)
+  q_name = q_2$item[q_id]
+  q_id = q_2[q_id,]
+  q_id$item = q_name
+  #q_id = q_id[,c(4,1,2,3)]
+  for(j in seq(0.1,0.9,by = 0.1)){
+  id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+  q_2new = q_id[,-1]
+  for(k in 1:length(id)){
+    q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+    index = sample(1:3,1)
+    q_2new[id[k],index] = 1
+    #index = sample(c(1:9)[-which(q_2new[id[k],] == 1)],1)
+    #q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+    #q_2new[id[k],index] = 1
+  }
+    sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(rate,nrow(q_id)),slip = rep(rate, nrow(q_id)))$dat
+    #sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(0.3686207,nrow(q_id)),slip = rep(0.3237241, nrow(q_id)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    q_2new$item = q_name
+    q_2new = q_2new[,c(4,1:3)]
+    acc_sub = append(acc_sub,q_newdistance(q_2new,sim_q2_dina_mis,3))#should not use Q2! Use the new Q matrix.
+  }
+  q2m1_acc[i,] = acc_sub
+}
+sg_result[row_id,] = apply(q2m1_acc,2,mean)
+row_id = row_id+1
+}
+#q2m1_result = apply(q2m1_acc,2,mean)
+#q1m2_result = apply(q2m1_acc,2,mean)
+#q1m2_result
+sg_result
+```
+
+#Spectral Clustering
+```{r}
+sg_sp_result = vector()
+for(rate in seq(0.05,0.45,by = 0.05)){
+result = vector()
+for(i in 1:15){
+  #sim_q2_dina_mis = sim.din(N = 300,q.matrix = q_2new,guess=rep(0.3686207,nrow(q_2)),slip = rep(0.3237241, nrow(q_2)))$dat
+  q_id = sample(1:nrow(q_2),size = 20)
+  q_name = q_3$item[q_id]
+  q_id = q_2[q_id,]
+  q_id$item = q_name
+  sim_q2_dina_mis = sim.din(N = 1400,q.matrix = q_id[2:4],guess=rep(rate,nrow(q_id)),slip = rep(rate, nrow(q_id)))$dat
+  sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+  colnames(sim_q2_dina_mis) = q_name
+  sp_result = spectral_cluster_k(sim_q2_dina_mis,2,15)
+  if(length(sp_result) == 2){
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 3
+  k_pred = spectral_cluster(evL = evl,k = k)
+  result = append(result,pred_newdistance(sim_q2_dina_mis,k_pred,k,q_id))
+  }
+}
+  sg_sp_result = append(sg_sp_result,mean(result))
+}
+#q3_sp = mean(result)
+#q3_sp
+#q3_sp=mean(result)
+#q3_sp
+
+```
+
+#Plot
+```{r}
+rate_vec = seq(0.05,0.45,by = 0.05)
+for(rate in 1:nrow(sg_result)){
+plot(x = seq(0.1,0.9,by=0.1),sg_result[rate,],col = "blue",xlab = "percentage misspecified of Q-matrix",ylab = "average group similarity",main = paste("slip = guess",rate_vec[rate],sep = "="),type = 'b',ylim = c(min(sg_result[rate,]),max(max(sg_result[rate,]),sg_sp_result[rate])))
+abline(a = sg_sp_result[rate],b = 0,col = "red")
+#abline(v = 0.13,col = 'black',lty = 2)
+#abline(a = q2_sp_s*0.933,b=0,col = "black",lty = 2,lwd = 2)
+#legend(x = 0,y = 0.94,legend = c("spectral clustering","DINA"),lty=c(1,1),pch=c(NA,1),col = c("red","blue"),lwd = c(1,1))
+}
+```
+
+use empirical Q-matrix misspecification cut-off, plot the slip/guess rate
+```{r}
+plot(x = seq(0.05,0.45,by = 0.05),sg_result[,2],col = "blue",xlab = "slip/guess rate",ylab = "average group similarity",main = "Similarity vs slip/guess under 20% misspec-Q",ylim = c(0.5,1))
+points(x = seq(0.05,0.45,by = 0.05),y = sg_sp_result,b = 0,col = "red",pch = 4)
+#abline(v = 0.13,col = 'black',lty = 2)
+#abline(a = q2_sp_s*0.933,b=0,col = "black",lty = 2,lwd = 2)
+legend(x = 0.3,y = 0.9,legend = c("spectral clustering","DINA"),pch=c(4,1),col = c("red","blue"))
+```
+
+#Cluster by students/ Work on Q-matrix and DINA
+```{r}
+set.seed(1)
+row_id = 1
+sp_result_s = matrix(data=NA,nrow = 9,ncol = 9)
+for(rate in seq(0.05,0.45,by = 0.05)){
+q2m1_result_s=matrix(data = NA,nrow = 10,ncol = 9)
+for(i in 1:10){
+  result = vector()
+  q_id = sample(1:nrow(q_2),size = 25)
+    q_name = q_2$item[q_id]
+    q_id = q_2[q_id,]
+    q_id$item = q_name
+    for(j in seq(0.1,0.9,by = 0.1)){
+      acc_sub = vector()
+      id = sample(1:nrow(q_id),size = ceiling(nrow(q_id)*j),replace = FALSE)
+      q_2new = q_id[,-1]
+      for(k in 1:length(id)){
+        q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+        index = sample(1:3,1)
+        #index = sample(c(1:3)[-which(q_2new[id[k],] == 1)],1)
+        #q_2new[id[k],which(q_2new[id[k],] == 1)] = 0
+        q_2new[id[k],index] = 1
+      }
+    sim_q2_dina_mis = sim.din(N = 400,q.matrix = q_id[,-1],guess=rep(rate,nrow(q_id)),slip = rep(rate, nrow(q_id)))$dat
+    sim_q2_dina_mis = as.data.frame(sim_q2_dina_mis)
+    colnames(sim_q2_dina_mis) = q_name
+    timss.dina = din(data = sim_q2_dina_mis,q.matrix = q_2new,rule = "DINA",progress = TRUE)
+    ind.stu = IRT.factor.scores(timss.dina,type = "MLE")
+    ind.stu = data.frame(ind.stu)
+    #colnames(ind.stu) = colnames(q_2new)
+    ind.stu$stud_id = row.names(ind.stu)
+    stud.skill_agg = aggregate(ind.stu,list(ind.stu[,1],ind.stu[,2],ind.stu[,3]),FUN = list)
+    stud.skill_agg = stud.skill_agg[,-c(4,5,6)]
+    for(k in 1:nrow(stud.skill_agg)){#k from 1 to 8, 8 skill classes.
+    stud_group = as.numeric(stud.skill_agg$stud_id[[k]]) #those are the students in same skill class among those who answered same questions!
+    if(length(stud_group) > 1){
+    sq = sim_q2_dina_mis[stud_group,]
+    sq = t(sq)#now it is questions X students, cuz we need the similarity of students!
+    sq = as.data.frame(sq)
+    #colnames(sq) = as.numeric(colnames(sq))
+    acc_sub = append(acc_sub,avg_dis(colnames(sq),sq))
+    }
+    }
+    result = append(result,mean(acc_sub))
+    }
+    q2m1_result_s[i,] = result
+}
+  sp_result_s[row_id,] = apply(q2m1_result_s,2,mean)
+  row_id = row_id + 1
+}
+sp_result_s
+```
+
+#Spectral Clustering
+```{r}
+row_id = 1
+sg_sp_result_s = vector()
+for(rate in seq(0.05,0.45,by = 0.05)){
+#for(i in 1:5){
+  pred_dis = vector()
+  #sim_q2_dina_mis = sim.din(N = 300,q.matrix = q_2new,guess=rep(0.3686207,nrow(q_2)),slip = rep(0.3237241, nrow(q_2)))$dat
+  q_id = sample(1:nrow(q_2),size = 25)
+  q_name = q_2$item[q_id]
+  q_id = q_2[q_id,]
+  q_id$item = q_name
+  sim_q2_dina_mis = sim.din(N = 400,q.matrix = q_id[,-1],guess=rep(rate,nrow(q_id)),slip = rep(rate, nrow(q_id)))$dat
+  sq = t(sim_q2_dina_mis)
+  sq = as.data.frame(sq)
+  row.names(sq) = q_name
+  #colnames(sq) = c(1:length(sq))
+  sp_result = spectral_cluster_k(sq,2,200)
+  if(length(sp_result) == 2){
+  n = sp_result[[2]]
+  evl = sp_result[[1]]
+  k = 8
+  k_pred = spectral_cluster(evL = evl,k = k)
+  for(j in 1:k){
+    temp = colnames(sq)[k_pred == j]
+    if(length(temp) > 1){
+      pred_dis = append(pred_dis,avg_dis(temp,sq))
+    }
+  }
+  sg_sp_result_s = append(sg_sp_result_s,mean(pred_dis))
+  }
+#}
+}
+
+```
+
+#Plot
+```{r}
+rate_vec = seq(0.05,0.45,by = 0.05)
+for(rate in 1:nrow(sg_result)){
+plot(x = seq(0.1,0.9,by=0.1),sp_result_s[rate,],col = "blue",xlab = "percentage misspecified of Q-matrix",ylab = "average group similarity",main = paste("slip = guess",rate_vec[rate],sep = "="),type = 'b',ylim = c(min(sp_result_s[rate,]),max(max(sp_result_s[rate,]),sg_sp_result_s[rate])))
+abline(a = sg_sp_result_s[rate],b = 0,col = "red")
+}
+
+```
+
+```{r}
+plot(x = seq(0.05,0.45,by = 0.05),sp_result_s[,2],col = "blue",xlab = "slip/guess rate",ylab = "average group similarity",main = "Similarity vs slip/guess under 20% misspec-Q",ylim = c(0.5,1))
+points(x = seq(0.05,0.45,by = 0.05),y = sg_sp_result_s,b = 0,col = "red",pch = 4)
+#abline(v = 0.13,col = 'black',lty = 2)
+#abline(a = q2_sp_s*0.933,b=0,col = "black",lty = 2,lwd = 2)
+legend(x = 0.3,y = 0.9,legend = c("spectral clustering","DINA"),pch=c(4,1),col = c("red","blue"))
+```
+
+#Number of Questions
+```{r}
+
+```
+
+
+
+
+
+
+
+
